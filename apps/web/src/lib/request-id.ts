@@ -1,0 +1,7 @@
+import { headers } from "next/headers";
+import { randomUUID } from "crypto";
+
+export async function getCorrelationId() {
+  const h = await headers();
+  return h.get("x-correlation-id") ?? randomUUID();
+}

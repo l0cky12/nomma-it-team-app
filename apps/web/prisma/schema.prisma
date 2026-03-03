@@ -1,0 +1,257 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AppRole {
+  CADET_HELPER
+  TECHNICIAN
+  ADMIN
+}
+
+enum ProviderType {
+  SNIPEIT
+  GOOGLE
+  MICROSOFT
+  AD
+}
+
+enum AssetStatus {
+  AVAILABLE
+  CHECKED_OUT
+  IN_REPAIR
+  RETIRED
+}
+
+enum RepairStatus {
+  RECEIVED
+  DIAGNOSED
+  IN_REPAIR
+  READY
+  RETURNED
+}
+
+model User {
+  id              String             @id @default(cuid())
+  email           String             @unique
+  name            String
+  passwordHash    String
+  role            AppRole            @default(CADET_HELPER)
+  isActive        Boolean            @default(true)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  featureVotes    FeatureVote[]
+  connected       ConnectedAccount[]
+  loanersChecked  LoanerAssignment[] @relation("LoanerCheckedOutBy")
+  loanersReceived LoanerAssignment[] @relation("LoanerAssignee")
+  repairsAssigned RepairTicket[]     @relation("RepairTechnician")
+  audits          AuditEvent[]       @relation("AuditActor")
+  workflowRuns    WorkflowRun[]      @relation("WorkflowActor")
+  createdStubs    StubWorkflowRequest[]
+  accounts        Account[]
+  sessions        Session[]
+}
+
+model ConnectedAccount {
+  id                        String       @id @default(cuid())
+  userId                    String
+  provider                  ProviderType
+  externalUserIdentifier    String?
+  encryptedAccessToken      String
+  encryptedRefreshToken     String?
+  tokenExpiresAt            DateTime?
+  isShared                  Boolean      @default(false)
+  status                    String       @default("connected")
+  lastCheckedAt             DateTime?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+  user                      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+}
+
+model IntegrationConfig {
+  id                    String   @id @default(cuid())
+  snipeItBaseUrl        String?
+  googleFieldAssetTag   String?
+  googleFieldGrade      String?
+  googleFieldHomeroom   String?
+  microsoftTenantId     String?
+  enableSharedCreds     Boolean  @default(false)
+  updatedByUserId       String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Feature {
+  id          String        @id @default(cuid())
+  category    String
+  name        String        @unique
+  description String?
+  sortOrder   Int
+  createdAt   DateTime      @default(now())
+  votes       FeatureVote[]
+}
+
+model FeatureVote {
+  id         String   @id @default(cuid())
+  userId     String
+  featureId  String
+  priority   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feature    Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, featureId])
+}
+
+model Asset {
+  id            String            @id @default(cuid())
+  assetTag      String            @unique
+  serial        String?
+  displayName   String
+  status        AssetStatus       @default(AVAILABLE)
+  snipeItAssetId String?
+  assignedToId  String?
+  dueDate       DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  assignments   LoanerAssignment[]
+  repairTickets RepairTicket[]
+}
+
+model LoanerAssignment {
+  id                 String   @id @default(cuid())
+  assetId            String
+  assigneeUserId     String
+  checkedOutByUserId String
+  checkedOutAt       DateTime @default(now())
+  expectedReturnDate DateTime
+  checkedInAt        DateTime?
+  notes              String?
+  asset              Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assignee           User     @relation("LoanerAssignee", fields: [assigneeUserId], references: [id], onDelete: Restrict)
+  checkedOutBy       User     @relation("LoanerCheckedOutBy", fields: [checkedOutByUserId], references: [id], onDelete: Restrict)
+}
+
+model RepairTicket {
+  id             String        @id @default(cuid())
+  assetId        String
+  issue          String
+  technicianId   String
+  eta            DateTime?
+  status         RepairStatus  @default(RECEIVED)
+  openedByUserId String
+  closedAt       DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  asset          Asset         @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  technician     User          @relation("RepairTechnician", fields: [technicianId], references: [id], onDelete: Restrict)
+  history        RepairStatusHistory[]
+}
+
+model RepairStatusHistory {
+  id             String       @id @default(cuid())
+  repairTicketId String
+  fromStatus     RepairStatus?
+  toStatus       RepairStatus
+  changedByUserId String
+  createdAt      DateTime     @default(now())
+  note           String?
+  ticket         RepairTicket @relation(fields: [repairTicketId], references: [id], onDelete: Cascade)
+}
+
+model WorkflowRun {
+  id               String   @id @default(cuid())
+  actorUserId      String
+  workflowType     String
+  targetType       String
+  targetId         String
+  idempotencyKey   String?
+  correlationId    String
+  status           String
+  reviewSnapshot   Json?
+  confirmedAt      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  actor            User     @relation("WorkflowActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([workflowType, createdAt])
+}
+
+model AuditEvent {
+  id                              String   @id @default(cuid())
+  actorUserId                     String
+  actionType                      String
+  targetType                      String
+  targetId                        String
+  correlationId                   String
+  externalSystem                  String?
+  externalRequestId               String?
+  performedUsingSharedCredentials Boolean  @default(false)
+  beforeData                      Json?
+  afterData                       Json?
+  metadata                        Json?
+  success                         Boolean
+  errorSummary                    String?
+  createdAt                       DateTime @default(now())
+  actor                           User     @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId, createdAt])
+  @@index([targetType, targetId, createdAt])
+}
+
+model StubWorkflowRequest {
+  id          String   @id @default(cuid())
+  category    String
+  title       String
+  details     String
+  requestedBy String
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [requestedBy], references: [id], onDelete: Restrict)
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([sessionToken])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
